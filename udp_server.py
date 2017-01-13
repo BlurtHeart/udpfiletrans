@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 import socket
 from SocketServer import ThreadingUDPServer, BaseRequestHandler
-import time
 import json
 import os
 import hashlib
@@ -36,10 +35,11 @@ class MyRequestHandler(BaseRequestHandler):
         self.create_new_socket()
         self.handle_header()
         self.handle_body()
-        #self.socket.sendto(self.data.upper(), self.client_address)
+
     def __del__(self):
         if self.fp:
             self.fp.close()
+
     def handle_header(self):
         self.filename = self.header['filename']
         self.file_md5 = self.header['file_md5']
@@ -47,12 +47,13 @@ class MyRequestHandler(BaseRequestHandler):
         self.full_packets = self.header['file_packets']
         self.received_packets_list = []
         self.real_file = os.path.join(self.file_path, self.filename)
+        self.max_try_times = 10
         self.fp = open(self.real_file, 'w')
         data = {}
         data['filename'] = self.filename
         data['status'] = 'syn-ack'
-        jsn_data = json.dumps(data)
-        self.send_data(jsn_data)
+        self.send_data(data)
+
     def create_new_socket(self):
         self.new_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.new_socket.settimeout(3)
@@ -69,17 +70,27 @@ class MyRequestHandler(BaseRequestHandler):
             try:
                 recv_data = self.new_socket.recv(self.recv_size)
                 self.handle_file_data(recv_data)
+                recv_data['status'] = 'received'
+                self.send_data(recv_data)
                 try_times = 0
             except socket.timeout:
                 try_times += 1
                 if try_times > self.max_try_times:
                     break
+        data = {}
+        data['filename'] = self.filename
         if recv_finish is True:
-            check_result = self.check_file_md5()
+            check_result = self.check_file_md5()                    
             if check_result is True:
-                print self.filename, ' received True'
+                data['status'] = 'finished'
+                print self.filename, 'received True'
             else:
-                print self.filename, ' received md5 check failed'
+                data['status'] = 'failed'
+                print self.filename, 'received md5 check failed'
+        else:
+            data['status'] = 'failed'    
+        self.send_data(data)
+
     def check_file_md5(self):
         # check self.file_md5 and md5(self.filename)
         file_md5 = calculate_file_md5(self.fp)
@@ -101,6 +112,7 @@ class MyRequestHandler(BaseRequestHandler):
             else:
                 self.received_packets_list.append(recv_dict['packet_index'])
         self.write_file(recv_dict['packet_offset'], recv_dict['body'])
+
     def write_file(packet_offset, file_data):
         # fseek to packet_offset position, and write file_data into self.filename
         self.fp.seek(packet_offset)
@@ -113,10 +125,10 @@ class MyRequestHandler(BaseRequestHandler):
             if i not in self.received_packets_list:
                 return False
         return True
-    def hanle_recv_packet(self):
-        self.received_packets_list.append(self.recv_packet['packet_index'])
+
     def send_data(self, data):
-        self.new_socket.sendto(data, self.client_address)
+        jsn_data = json.dumps(data)
+        self.new_socket.sendto(jsn_data, self.client_address)
 
 if __name__ == "__main__":
     server = ThreadingUDPServer(addr, MyRequestHandler)
