@@ -14,13 +14,14 @@ def calculate_md5(data):
     m.update(data)
     return m.hexdigest()
 
-def calculate_file_md5(fp):
+def calculate_file_md5(filename):
     m = hashlib.md5()
-    while True:
-        data = fp.read(1024)
-        if not data:
-            break
-        m.update(data)
+    with open(filename, 'r') as fp:
+        while True:
+            data = fp.read(1024)
+            if not data:
+                break
+            m.update(data)
     return m.hexdigest()
 
 class MyRequestHandler(BaseRequestHandler):
@@ -37,6 +38,7 @@ class MyRequestHandler(BaseRequestHandler):
         self.handle_body()
 
     def __del__(self):
+        pass
         if self.fp:
             self.fp.close()
 
@@ -47,7 +49,7 @@ class MyRequestHandler(BaseRequestHandler):
         self.full_packets = self.header['file_packets']
         self.received_packets_list = []
         self.real_file = os.path.join(self.file_path, self.filename)
-        self.max_try_times = 10
+        self.max_try_times = 5
         self.fp = open(self.real_file, 'w')
         data = {}
         data['filename'] = self.filename
@@ -69,9 +71,11 @@ class MyRequestHandler(BaseRequestHandler):
                 break
             try:
                 recv_data = self.new_socket.recv(self.recv_size)
-                self.handle_file_data(recv_data)
-                recv_data['status'] = 'received'
-                self.send_data(recv_data)
+                print 'recv data:', recv_data
+                recv_dict = json.loads(recv_data)
+                self.handle_file_data(recv_dict)
+                recv_dict['status'] = 'block-ack'
+                self.send_data(recv_dict)
                 try_times = 0
             except socket.timeout:
                 try_times += 1
@@ -93,16 +97,16 @@ class MyRequestHandler(BaseRequestHandler):
 
     def check_file_md5(self):
         # check self.file_md5 and md5(self.filename)
-        file_md5 = calculate_file_md5(self.fp)
+        file_md5 = calculate_file_md5(self.real_file)
         if file_md5 == self.file_md5:
             return True
         else:
             return False
 
-    def handle_file_data(self, recv_data):
+    def handle_file_data(self, recv_dict):
         # handle packet which include part of filedata and information of the part
-        recv_dict = json.loads(recv_data)
-        packet_md5 = self.calculate_md5(recv_dict['body'])
+        # recv_dict = json.loads(recv_data)
+        packet_md5 = calculate_md5(recv_dict['body'])
         if packet_md5 != recv_dict['packet_md5']:
             raise socket.timeout    # raise is important
 
@@ -111,23 +115,26 @@ class MyRequestHandler(BaseRequestHandler):
                 raise socket.timeout    # define another error type
             else:
                 self.received_packets_list.append(recv_dict['packet_index'])
-        self.write_file(recv_dict['packet_offset'], recv_dict['body'])
+        self.write_file(recv_dict['file_offset'], recv_dict['body'])
 
-    def write_file(packet_offset, file_data):
+    def write_file(self, packet_offset, file_data):
         # fseek to packet_offset position, and write file_data into self.filename
+        print 'write file:', packet_offset, file_data
         self.fp.seek(packet_offset)
         self.fp.write(file_data)
 
     def check_packets(self):
         # if all packets which formed the whole file are received, then return true; 
         # on the contrary, return false
-        for i in xrange(1, self.full_packets+1):
+        for i in xrange(0, self.full_packets):
             if i not in self.received_packets_list:
                 return False
+        self.fp.close()
         return True
 
     def send_data(self, data):
         jsn_data = json.dumps(data)
+        print 'send data:', jsn_data
         self.new_socket.sendto(jsn_data, self.client_address)
 
 if __name__ == "__main__":

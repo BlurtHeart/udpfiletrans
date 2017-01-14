@@ -18,7 +18,7 @@
 
 status:
     syn-ack         # 握手应答
-    received        # 块收包正常
+    block-ack        # 块收包正常
     uncorrect       # 块包不正常
     finished        # 传输成功
     failed          # 传输失败

@@ -4,6 +4,7 @@ from time import ctime
 import sys
 import os
 import json
+import copy
 import hashlib
 
 def calculate_md5(data):
@@ -57,10 +58,10 @@ class UdpClient(object):
             return False
     def recv_data(self, recv_size):
         try:
-            received_data = self.sock.recv(recv_size)
-            return received_data
+            received_data, client_addr = self.sock.recvfrom(recv_size)
+            return (received_data, client_addr)
         except socket.timeout:
-            return None
+            return (None, None)
 
 class FileClient(object):
     def __init__(self, host, port, cfg):
@@ -71,9 +72,9 @@ class FileClient(object):
         self.recv_path = cfg['recv_path']
         self.filename = cfg['filename']
         self.real_file = os.path.join(self.send_path, self.filename)
+        self.fp = open(self.real_file, 'r')
         self.calculate_file()
         self.header = self.create_header()
-        self.fp = open(self.real_file, 'r')
 
         self.try_times = 5
 
@@ -92,7 +93,7 @@ class FileClient(object):
 
     def calculate_file(self):
         try:
-            self.file_md5 = calculate_file_md5(self.real_file)
+            self.file_md5 = calculate_file_md5(self.fp)
             self.file_size = os.path.getsize(self.real_file)
             # round up to an integer; ceil
             self.file_packets = (self.file_size + self.block_size - 1) / self.block_size
@@ -101,23 +102,27 @@ class FileClient(object):
 
     def send_data(self, data):
         jsn_data = json.dumps(data)
+        print 'send_data:', data
         self.udpclient.send_data(jsn_data)
 
     def recv_data(self, try_times):
         i = 0
         while i < try_times:
-            recv_dict = self.udpclient.recv_data(self.recv_size)
+            recv_dict, server_addr = self.udpclient.recv_data(self.recv_size)
+            print 'recv data:', recv_dict
             if recv_dict is not None:
                 break
         if i == try_times:
-            return None:
+            return (None, None)
         else:
-            return json.loads(recv_dict)
+            return (json.loads(recv_dict), server_addr)
 
     def shakehands(self):
         self.send_data(self.header)
-        recv_data = self.recv_data(self.try_times)
+        recv_data, server_addr = self.recv_data(self.try_times)
         if recv_data is not None and recv_data['filename'] == self.filename and recv_data['status'] == 'syn-ack':
+            self.udpclient.host = server_addr[0]
+            self.udpclient.port = server_addr[1]
             return True
         else:
             return False
@@ -126,8 +131,34 @@ class FileClient(object):
         shake_result = self.shakehands()
         if shake_result == False:
             return False
-        while True():
-            pass
+        packet_index = 0
+        i_times = 0
+        send_finish = False
+
+        while i_times < self.try_times:
+            file_offset = packet_index * self.block_size
+            if file_offset >= self.file_size:
+                server_data, server_addr = self.recv_data(self.try_times)
+                if server_data is not None and server_data['status'] == 'finished' and server_data['filename'] == self.filename:
+                    send_finish = True
+                break
+            self.fp.seek(file_offset)
+            body = self.fp.read(self.block_size)
+            packet_md5 = calculate_md5(body)
+            dict_data = copy.deepcopy(self.header)
+            dict_data['status'] = 'block'
+            dict_data['body'] = body
+            dict_data['packet_md5'] = packet_md5
+            dict_data['file_offset'] = file_offset
+            dict_data['packet_index'] = packet_index
+            self.send_data(dict_data)
+            server_data, server_addr = self.recv_data(self.try_times)
+            if server_data is not None and server_data['status'] == 'block-ack' and server_data['packet_index'] == packet_index and server_data['filename'] == self.filename:
+                packet_index += 1
+                i_times = 0
+            else:
+                i_time += 1
+        return send_finish
 
     def run(self):
         send_result = self.send_file()
@@ -137,9 +168,7 @@ if __name__ == "__main__":
     host = '127.0.0.1'
     port = 54321
     recv_size = 1024
-    client = FileClient(host, port)
-    header = {"filename":'1.txt', "file_md5":"xxxxxxxxxxxxx", "file_path":"/home/steve/", "file_packets":0}
-    data = json.dumps(header)
-    client.send_data(data)
-    received_data = client.recv_data(recv_size)
-    print received_data
+    
+    header = {"filename":'1.txt', "file_md5":"xxxxxxxxxxxxx", "send_path":"/home/steve/", "file_packets":1, "recv_path":"/home/steve/workspace/"}
+    client = FileClient(host, port, header)
+    result = client.run()
