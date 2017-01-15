@@ -34,12 +34,12 @@ class MyRequestHandler(BaseRequestHandler):
         self.header = json.loads(self.data)
         print 'self.header:', self.header
         self.create_new_socket()
-        self.handle_header()
-        self.handle_body()
+        handle_result = self.handle_header()
+        if handle_result == 'right':
+            self.handle_body()
 
     def __del__(self):
-        pass
-        if self.fp:
+        if hasattr(self, 'fp'):
             self.fp.close()
 
     def handle_header(self):
@@ -48,13 +48,27 @@ class MyRequestHandler(BaseRequestHandler):
         self.file_path = self.header['file_path']
         self.full_packets = self.header['file_packets']
         self.received_packets_list = []
-        self.real_file = os.path.join(self.file_path, self.filename)
+        self.real_file = os.path.join(self.file_path, self.filename)      
+        self.fp = open(self.real_file, 'r+w')
         self.max_try_times = 5
-        self.fp = open(self.real_file, 'w')
+
         data = {}
         data['filename'] = self.filename
-        data['status'] = 'syn-ack'
-        self.send_data(data)
+        if os.path.isfile(self.real_file):
+            check_result = self.check_file_md5()
+            if check_result == True:
+                data['status'] = 'exist'
+                self.send_data(data)
+                return 'exist'
+            else:
+                self.fp.truncate()          # or resume broken transfer
+                data['status'] = 'syn-ack'  # here file not complete
+                self.send_data(data)
+                return 'right'
+        else:
+            data['status'] = 'syn-ack'
+            self.send_data(data)
+            return 'right'
 
     def create_new_socket(self):
         self.new_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

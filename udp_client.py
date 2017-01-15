@@ -120,17 +120,22 @@ class FileClient(object):
     def shakehands(self):
         self.send_data(self.header)
         recv_data, server_addr = self.recv_data(self.try_times)
-        if recv_data is not None and recv_data['filename'] == self.filename and recv_data['status'] == 'syn-ack':
-            self.udpclient.host = server_addr[0]
-            self.udpclient.port = server_addr[1]
-            return True
+        if recv_data is not None and recv_data['filename'] == self.filename: 
+            if recv_data['status'] == 'syn-ack':
+                self.udpclient.host = server_addr[0]
+                self.udpclient.port = server_addr[1]
+                return 1
+            elif recv_data['status'] == 'exist':
+                return 2
         else:
-            return False
+            return 0
 
     def send_file(self):
         shake_result = self.shakehands()
-        if shake_result == False:
+        if shake_result == 0:
             return False
+        elif shake_result == 2:
+            return True
         packet_index = 0
         i_times = 0
         send_finish = False
@@ -157,7 +162,7 @@ class FileClient(object):
                 packet_index += 1
                 i_times = 0
             else:
-                i_time += 1
+                i_times += 1
         return send_finish
 
     def run(self):
