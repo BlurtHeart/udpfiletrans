@@ -32,7 +32,6 @@ class MyRequestHandler(BaseRequestHandler):
         self.recv_size = 1500   # the capacity of the udp packet 
         print 'client data:', self.data
         self.header = json.loads(self.data)
-        print 'self.header:', self.header
         self.create_new_socket()
         handle_result = self.handle_header()
         if handle_result == 'right':
@@ -48,8 +47,10 @@ class MyRequestHandler(BaseRequestHandler):
         self.file_path = self.header['file_path']
         self.full_packets = self.header['file_packets']
         self.received_packets_list = []
-        self.real_file = os.path.join(self.file_path, self.filename)      
-        self.fp = open(self.real_file, 'r+w')
+        self.real_file = os.path.join(self.file_path, self.filename)
+        if not os.path.isfile(self.real_file):
+            os.mknod(self.real_file)     
+        self.fp = open(self.real_file, 'r+')
         self.max_try_times = 5
 
         data = {}
