@@ -6,6 +6,7 @@ import os
 import json
 import copy
 import hashlib
+from proto import ProtoCode
 
 def calculate_md5(data):
     m = hashlib.md5()
@@ -27,7 +28,7 @@ class UdpClient(object):
         self._port = port
         self.set_address()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.settimeout(5)
+        self.sock.settimeout(3)
 
     def __del__(self):
         try:
@@ -76,6 +77,7 @@ class FileClient(object):
         self.calculate_file()
         self.header = self.create_header()
 
+        self.recv_times = 3
         self.try_times = 5
 
     def __del__(self):
@@ -88,7 +90,7 @@ class FileClient(object):
         header['file_path'] = self.recv_path
         header['file_md5'] = self.file_md5
         header['file_packets'] = self.file_packets
-        header['status'] = 'syn'
+        header['status'] = ProtoCode.SYN
         return header
 
     def calculate_file(self):
@@ -105,27 +107,27 @@ class FileClient(object):
         print 'send_data:', data
         self.udpclient.send_data(jsn_data)
 
-    def recv_data(self, try_times):
+    def recv_data(self, recv_times):
         i = 0
-        while i < try_times:
+        while i < recv_times:
             recv_dict, server_addr = self.udpclient.recv_data(self.recv_size)
             print 'recv data:', recv_dict
             if recv_dict is not None:
                 break
-        if i == try_times:
+        if i == recv_times:
             return (None, None)
         else:
             return (json.loads(recv_dict), server_addr)
 
     def shakehands(self):
         self.send_data(self.header)
-        recv_data, server_addr = self.recv_data(self.try_times)
+        recv_data, server_addr = self.recv_data(self.recv_times)
         if recv_data is not None and recv_data['filename'] == self.filename: 
-            if recv_data['status'] == 'syn-ack':
+            if recv_data['status'] == ProtoCode.ACK:
                 self.udpclient.host = server_addr[0]
                 self.udpclient.port = server_addr[1]
                 return 1
-            elif recv_data['status'] == 'exist':
+            elif recv_data['status'] == ProtoCode.EXIST:
                 return 2
         else:
             return 0
@@ -143,22 +145,22 @@ class FileClient(object):
         while i_times < self.try_times:
             file_offset = packet_index * self.block_size
             if file_offset >= self.file_size:
-                server_data, server_addr = self.recv_data(self.try_times)
-                if server_data is not None and server_data['status'] == 'finished' and server_data['filename'] == self.filename:
+                server_data, server_addr = self.recv_data(self.recv_times)
+                if server_data is not None and server_data['status'] == ProtoCode.COMPLETE and server_data['filename'] == self.filename:
                     send_finish = True
                 break
             self.fp.seek(file_offset)
             body = self.fp.read(self.block_size)
             packet_md5 = calculate_md5(body)
             dict_data = copy.deepcopy(self.header)
-            dict_data['status'] = 'block'
+            dict_data['status'] = ProtoCode.BLOCK
             dict_data['body'] = body
             dict_data['packet_md5'] = packet_md5
             dict_data['file_offset'] = file_offset
             dict_data['packet_index'] = packet_index
             self.send_data(dict_data)
-            server_data, server_addr = self.recv_data(self.try_times)
-            if server_data is not None and server_data['status'] == 'block-ack' and server_data['packet_index'] == packet_index and server_data['filename'] == self.filename:
+            server_data, server_addr = self.recv_data(self.recv_times)
+            if server_data is not None and server_data['status'] == ProtoCode.BLOCKACK and server_data['packet_index'] == packet_index and server_data['filename'] == self.filename:
                 packet_index += 1
                 i_times = 0
             else:
@@ -174,6 +176,6 @@ if __name__ == "__main__":
     port = 54321
     recv_size = 1024
     
-    header = {"filename":'1.txt', "file_md5":"xxxxxxxxxxxxx", "send_path":"/home/steve/", "file_packets":1, "recv_path":"/home/steve/workspace/"}
+    header = {"filename":'1.txt',  "send_path":"/home/steve/", "recv_path":"/home/steve/workspace/"}
     client = FileClient(host, port, header)
     result = client.run()

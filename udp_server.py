@@ -4,10 +4,17 @@ from SocketServer import ThreadingUDPServer, BaseRequestHandler
 import json
 import os
 import hashlib
+from proto import ProtoCode
 
 host = '127.0.0.1'
 port = 54321
 addr = (host, port)
+
+class CheckResult:
+    UNKNOWN = 0
+    NORMAL = 1
+    EXIST = 2
+    BROKEN = 3
 
 def calculate_md5(data):
     m = hashlib.md5()
@@ -32,9 +39,9 @@ class MyRequestHandler(BaseRequestHandler):
         self.recv_size = 1500   # the capacity of the udp packet 
         print 'client data:', self.data
         self.header = json.loads(self.data)
-        self.create_new_socket()
+        
         handle_result = self.handle_header()
-        if handle_result == 'right':
+        if handle_result == CheckResult.NORMAL:
             self.handle_body()
 
     def __del__(self):
@@ -42,6 +49,11 @@ class MyRequestHandler(BaseRequestHandler):
             self.fp.close()
 
     def handle_header(self):
+
+        if self.header['status'] != ProtoCode.SYN:
+            return CheckResult.UNKNOWN
+
+        self.create_new_socket()  
         self.filename = self.header['filename']
         self.file_md5 = self.header['file_md5']
         self.file_path = self.header['file_path']
@@ -58,18 +70,18 @@ class MyRequestHandler(BaseRequestHandler):
         if os.path.isfile(self.real_file):
             check_result = self.check_file_md5()
             if check_result == True:
-                data['status'] = 'exist'
+                data['status'] = ProtoCode.EXIST
                 self.send_data(data)
-                return 'exist'
+                return CheckResult.EXIST
             else:
                 self.fp.truncate()          # or resume broken transfer
-                data['status'] = 'syn-ack'  # here file not complete
+                data['status'] = ProtoCode.ACK     # here file not complete
                 self.send_data(data)
-                return 'right'
+                return CheckResult.NORMAL
         else:
-            data['status'] = 'syn-ack'
+            data['status'] = ProtoCode.ACK
             self.send_data(data)
-            return 'right'
+            return CheckResult.NORMAL
 
     def create_new_socket(self):
         self.new_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -89,8 +101,11 @@ class MyRequestHandler(BaseRequestHandler):
                 print 'recv data:', recv_data
                 recv_dict = json.loads(recv_data)
                 self.handle_file_data(recv_dict)
-                recv_dict['status'] = 'block-ack'
-                self.send_data(recv_dict)
+                return_dict = dict()
+                return_dict['status'] = ProtoCode.BLOCKACK
+                return_dict['filename'] = self.filename
+                return_dict['packet_index'] = recv_dict['packet_index']
+                self.send_data(return_dict)
                 try_times = 0
             except socket.timeout:
                 try_times += 1
@@ -101,13 +116,13 @@ class MyRequestHandler(BaseRequestHandler):
         if recv_finish is True:
             check_result = self.check_file_md5()                    
             if check_result is True:
-                data['status'] = 'finished'
+                data['status'] = ProtoCode.COMPLETE
                 print self.filename, 'received True'
             else:
-                data['status'] = 'failed'
+                data['status'] = ProtoCode.FAILED
                 print self.filename, 'received md5 check failed'
         else:
-            data['status'] = 'failed'    
+            data['status'] = ProtoCode.FAILED    
         self.send_data(data)
 
     def check_file_md5(self):

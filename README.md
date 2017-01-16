@@ -24,6 +24,6 @@ status:
     syn-ack         # 握手应答
     exist			# file exist
     block-ack       # 块收包正常
-    uncorrect       # 块包不正常
-    finished        # 传输成功
+    block-uncorrect # 块包不正常
+    complete        # 传输成功
     failed          # 传输失败
