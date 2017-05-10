@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import socket
 from SocketServer import ThreadingUDPServer, BaseRequestHandler
-import json
+import msgpack
 import os
 import hashlib
 from proto import ProtoCode
@@ -38,7 +38,7 @@ class MyRequestHandler(BaseRequestHandler):
         self.data = self.request[0]
         self.recv_size = 1500   # the capacity of the udp packet 
         print 'client data:', self.data
-        self.header = json.loads(self.data)
+        self.header = msgpack.unpackb(self.data)
         
         handle_result = self.handle_header()
         if handle_result == CheckResult.NORMAL:
@@ -99,7 +99,7 @@ class MyRequestHandler(BaseRequestHandler):
             try:
                 recv_data = self.new_socket.recv(self.recv_size)
                 print 'recv data:', recv_data
-                recv_dict = json.loads(recv_data)
+                recv_dict = msgpack.unpackb(recv_data)
                 self.handle_file_data(recv_dict)
                 return_dict = dict()
                 return_dict['status'] = ProtoCode.BLOCKACK
@@ -135,7 +135,6 @@ class MyRequestHandler(BaseRequestHandler):
 
     def handle_file_data(self, recv_dict):
         # handle packet which include part of filedata and information of the part
-        # recv_dict = json.loads(recv_data)
         packet_md5 = calculate_md5(recv_dict['body'])
         if packet_md5 != recv_dict['packet_md5']:
             raise socket.timeout    # raise is important
@@ -163,7 +162,7 @@ class MyRequestHandler(BaseRequestHandler):
         return True
 
     def send_data(self, data):
-        jsn_data = json.dumps(data)
+        jsn_data = msgpack.packb(data)
         print 'send data:', jsn_data
         self.new_socket.sendto(jsn_data, self.client_address)
 

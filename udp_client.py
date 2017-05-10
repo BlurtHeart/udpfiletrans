@@ -3,7 +3,7 @@ import socket
 from time import ctime
 import sys
 import os
-import json
+import msgpack
 import copy
 import hashlib
 from proto import ProtoCode
@@ -103,7 +103,7 @@ class FileClient(object):
             print 'error:', exp
 
     def send_data(self, data):
-        jsn_data = json.dumps(data)
+        jsn_data = msgpack.packb(data)
         print 'send_data:', data
         self.udpclient.send_data(jsn_data)
 
@@ -117,7 +117,7 @@ class FileClient(object):
         if i == recv_times:
             return (None, None)
         else:
-            return (json.loads(recv_dict), server_addr)
+            return (msgpack.unpackb(recv_dict), server_addr)
 
     def shakehands(self):
         self.send_data(self.header)
