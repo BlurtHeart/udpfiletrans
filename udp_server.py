@@ -4,6 +4,7 @@ from SocketServer import ThreadingUDPServer, BaseRequestHandler
 import msgpack
 import os
 import hashlib
+import time
 from proto import ProtoCode
 
 host = '127.0.0.1'
@@ -31,13 +32,23 @@ def calculate_file_md5(filename):
             m.update(data)
     return m.hexdigest()
 
+
+def timedec(func):
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        func(*args, **kwargs)
+        end = time.time()
+        print 'cost %s seconds' % (end-start)
+    return wrapper
+
+
 class MyRequestHandler(BaseRequestHandler):
+    @timedec
     def handle(self):
         print 'got connection from', self.client_address
         self.socket = self.request[1]
         self.data = self.request[0]
         self.recv_size = 1500   # the capacity of the udp packet 
-        print 'client data:', self.data
         self.header = msgpack.unpackb(self.data)
         
         handle_result = self.handle_header()
@@ -102,7 +113,6 @@ class MyRequestHandler(BaseRequestHandler):
                 break
             try:
                 recv_data = self.new_socket.recv(self.recv_size)
-                print 'recv data:', recv_data
                 recv_dict = msgpack.unpackb(recv_data)
                 self.handle_file_data(recv_dict)
                 return_dict = dict()
@@ -124,7 +134,6 @@ class MyRequestHandler(BaseRequestHandler):
                 print self.filename, 'received True'
             else:
                 data['status'] = ProtoCode.FAILED
-                print self.filename, 'received md5 check failed'
         else:
             data['status'] = ProtoCode.FAILED    
         self.send_data(data)
@@ -152,7 +161,6 @@ class MyRequestHandler(BaseRequestHandler):
 
     def write_file(self, packet_offset, file_data):
         # fseek to packet_offset position, and write file_data into self.filename
-        print 'write file:', packet_offset, file_data
         self.fp.seek(packet_offset)
         self.fp.write(file_data)
 
@@ -167,7 +175,6 @@ class MyRequestHandler(BaseRequestHandler):
 
     def send_data(self, data):
         jsn_data = msgpack.packb(data)
-        print 'send data:', jsn_data
         self.new_socket.sendto(jsn_data, self.client_address)
 
 if __name__ == "__main__":

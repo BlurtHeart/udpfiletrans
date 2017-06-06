@@ -104,14 +104,12 @@ class FileClient(object):
 
     def send_data(self, data):
         jsn_data = msgpack.packb(data)
-        print 'send_data:', data
         self.udpclient.send_data(jsn_data)
 
     def recv_data(self, recv_times):
         i = 0
         while i < recv_times:
             recv_dict, server_addr = self.udpclient.recv_data(self.recv_size)
-            print 'recv data:', recv_dict
             if recv_dict is not None:
                 break
         if i == recv_times:
