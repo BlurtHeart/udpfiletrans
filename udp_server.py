@@ -60,8 +60,12 @@ class MyRequestHandler(BaseRequestHandler):
         self.full_packets = self.header['file_packets']
         self.received_packets_list = []
         self.real_file = os.path.join(self.file_path, self.filename)
+        if not os.path.isdir(self.file_path):
+            os.makedirs(self.file_path)
         if not os.path.isfile(self.real_file):
-            os.mknod(self.real_file)     
+            #os.mknod(self.real_file)  # mknod must execute with super-user privileges   
+            with open(self.real_file, 'w') as fp:
+                pass
         self.fp = open(self.real_file, 'r+')
         self.max_try_times = 5
 

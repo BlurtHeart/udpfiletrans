@@ -176,6 +176,6 @@ if __name__ == "__main__":
     port = 54321
     recv_size = 1024
     
-    header = {"filename":'1.txt',  "send_path":"/home/steve/", "recv_path":"/home/steve/workspace/"}
+    header = {"filename":'1.txt',  "send_path":"/Users/steve/", "recv_path":"/Users/steve/workspace/"}
     client = FileClient(host, port, header)
     result = client.run()
