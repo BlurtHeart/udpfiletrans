@@ -5,6 +5,8 @@ import msgpack
 import os
 import hashlib
 import time
+import threading
+import Queue
 from proto import ProtoCode
 
 host = '127.0.0.1'
@@ -33,6 +35,20 @@ def calculate_file_md5(filename):
     return m.hexdigest()
 
 
+class FileDataError(Exception):
+    def __init__(self, value):
+        self.value = value
+    def __str__(self):
+        return repr(self.value)
+
+
+class BlockDuplicateError(Exception):
+    def __init__(self, value):
+        self.value = value
+    def __str__(self):
+        return repr(self.value)
+
+
 def timedec(func):
     def wrapper(*args, **kwargs):
         start = time.time()
@@ -53,23 +69,33 @@ class MyRequestHandler(BaseRequestHandler):
         
         handle_result = self.handle_header()
         if handle_result == CheckResult.NORMAL:
-            self.handle_body()
+            tr = threading.Thread(target=self.handle_recv, args=(), name='recv')
+            ts = threading.Thread(target=self.handle_send, args=(), name='send')
+            tr.start()
+            ts.start()
+            tr.join()
+            ts.join()
 
     def __del__(self):
         if hasattr(self, 'fp'):
             self.fp.close()
+        if hasattr(self, 'new_socket'):
+            self.new_socket.close()
 
     def handle_header(self):
 
         if self.header['status'] != ProtoCode.SYN:
             return CheckResult.UNKNOWN
 
+        self.queue = Queue.Queue(-1)
         self.create_new_socket()  
         self.filename = self.header['filename']
         self.file_md5 = self.header['file_md5']
         self.file_path = self.header['file_path']
         self.full_packets = self.header['file_packets']
         self.received_packets_list = []
+        self.recv_finish = False
+        self.exit = False
         self.real_file = os.path.join(self.file_path, self.filename)
         if not os.path.isdir(self.file_path):
             os.makedirs(self.file_path)
@@ -98,21 +124,26 @@ class MyRequestHandler(BaseRequestHandler):
             self.send_data(data)
             return CheckResult.NORMAL
 
-    def create_new_socket(self):
-        self.new_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.new_socket.settimeout(3)
-        # new socket will form the client through the first ack packet
-        # here's the question: Is the server's addr same with the addr which client received
-        # and will send to?
-    def handle_body(self):
-        try_times = 0
-        recv_finish = False
+    def handle_recv(self):
         while True:
-            if self.check_packets():
-                recv_finish = True
+            if self.recv_finish is True:
                 break
             try:
                 recv_data = self.new_socket.recv(self.recv_size)
+                self.queue.put(recv_data)
+            except socket.timeout:
+                pass
+
+    def handle_send(self):
+        while True:
+            if self.queue.qsize() == 0 and self.check_packets():
+                self.recv_finish = True
+                break
+            try:
+                recv_data = self.queue.get(block=False, timeout=3)
+            except Queue.Empty:
+                time.sleep(0.001)   # due to python GIL, better sleep for interpreter change to another thread
+            try:
                 recv_dict = msgpack.unpackb(recv_data)
                 self.handle_file_data(recv_dict)
                 return_dict = dict()
@@ -120,14 +151,17 @@ class MyRequestHandler(BaseRequestHandler):
                 return_dict['filename'] = self.filename
                 return_dict['packet_index'] = recv_dict['packet_index']
                 self.send_data(return_dict)
-                try_times = 0
-            except socket.timeout:
-                try_times += 1
-                if try_times > self.max_try_times:
-                    break
+            except FileDataError, e:
+                return_dict = dict()
+                return_dict['status'] = ProtoCode.BLOCKUNCORRECT
+                return_dict['filename'] = self.filename
+                return_dict['packet_index'] = recv_dict['packet_index']
+                self.send_data(return_dict)
+            except BlockDuplicateError, e:
+                pass
         data = {}
         data['filename'] = self.filename
-        if recv_finish is True:
+        if self.recv_finish is True:
             check_result = self.check_file_md5()                    
             if check_result is True:
                 data['status'] = ProtoCode.COMPLETE
@@ -137,6 +171,13 @@ class MyRequestHandler(BaseRequestHandler):
         else:
             data['status'] = ProtoCode.FAILED    
         self.send_data(data)
+
+    def create_new_socket(self):
+        self.new_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.new_socket.settimeout(3)
+        # new socket will form the client through the first ack packet
+        # here's the question: Is the server's addr same with the addr which client received
+        # and will send to?
 
     def check_file_md5(self):
         # check self.file_md5 and md5(self.filename)
@@ -150,11 +191,11 @@ class MyRequestHandler(BaseRequestHandler):
         # handle packet which include part of filedata and information of the part
         packet_md5 = calculate_md5(recv_dict['body'])
         if packet_md5 != recv_dict['packet_md5']:
-            raise socket.timeout    # raise is important
+            raise FileDataError('packet broken')    # raise is important
 
         if isinstance(recv_dict['packet_index'], int):
             if recv_dict['packet_index'] in self.received_packets_list:
-                raise socket.timeout    # define another error type
+                raise BlockDuplicateError('packet duplicate')
             else:
                 self.received_packets_list.append(recv_dict['packet_index'])
         self.write_file(recv_dict['file_offset'], recv_dict['body'])

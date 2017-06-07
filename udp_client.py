@@ -6,6 +6,7 @@ import os
 import msgpack
 import copy
 import hashlib
+import threading
 from proto import ProtoCode
 
 def calculate_md5(data):
@@ -112,6 +113,7 @@ class FileClient(object):
             recv_dict, server_addr = self.udpclient.recv_data(self.recv_size)
             if recv_dict is not None:
                 break
+            i += 1
         if i == recv_times:
             return (None, None)
         else:
@@ -129,6 +131,48 @@ class FileClient(object):
                 return 2
         else:
             return 0
+
+    def send_thread(self):
+        file_index = 0
+        while file_index < self.file_packets:
+            file_offset = file_index * self.block_size
+            self.fp.seek(file_offset)
+            body = self.fp.read(self.block_size)
+            packet_md5 = calculate_md5(body)
+            dict_data = copy.deepcopy(self.header)
+            dict_data['status'] = ProtoCode.BLOCK
+            dict_data['body'] = body
+            dict_data['packet_md5'] = packet_md5
+            dict_data['file_offset'] = file_offset
+            dict_data['packet_index'] = file_index
+            self.send_data(dict_data)
+            file_index += 1
+
+    def recv_thread(self):
+        while True:
+            server_data, server_addr = self.recv_data(self.recv_times)
+            if server_data is not None and server_data['filename'] == self.filename:
+                if server_data['status'] == ProtoCode.COMPLETE:
+                    self.send_result = True
+                    break
+                elif server_data['status'] == ProtoCode.BLOCKACK:
+                    pass
+                elif server_data['status'] == ProtoCode.BLOCKUNCORRECT:
+                    file_offset = server_data['packet_index'] * self.block_size
+                    self.fp.seek(file_offset)
+                    body = self.fp.read(self.block_size)
+                    packet_md5 = calculate_md5(body)
+                    dict_data = copy.deepcopy(self.header)
+                    dict_data['packet_index'] = server_data['packet_index']
+                    dict_data['packet_md5'] = packet_md5
+                    dict_data['file_offset'] = file_offset
+                    self.send_data(dict_data)
+                elif server_data['status'] == ProtoCode.FAILED:
+                    self.send_result = False
+                    break
+            else:
+                self.send_result = False
+                break
 
     def send_file(self):
         shake_result = self.shakehands()
@@ -166,8 +210,21 @@ class FileClient(object):
         return send_finish
 
     def run(self):
-        send_result = self.send_file()
-        print self.real_file, send_result
+        # send_result = self.send_file()
+        # print self.real_file, send_result
+        shake_result = self.shakehands()
+        if shake_result == 0:
+            self.send_result = False
+        elif shake_result == 2:
+            self.send_result = True
+        else:
+            ts = threading.Thread(target=self.send_thread, args=(), name='send')
+            tr = threading.Thread(target=self.recv_thread, args=(), name='recv')
+            tr.start()
+            ts.start()
+            ts.join()
+            tr.join()
+        print self.real_file, self.send_result
    
 if __name__ == "__main__":
     host = '127.0.0.1'
