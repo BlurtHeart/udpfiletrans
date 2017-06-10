@@ -4,7 +4,6 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -12,15 +11,15 @@ import (
 	"net"
 	"os"
 	fpath "path/filepath"
-	"strconv"
-	"strings"
+
+	"go/handler"
+	"go/model"
+	"go/proto"
 
 	"github.com/BurntSushi/toml"
 	"github.com/mreiferson/go-options"
 )
 
-// max concurrent 50 files
-var connectionChannel chan []byte = make(chan []byte, 50)
 var dataChannel chan []byte = make(chan []byte, 100000)
 
 var (
@@ -34,59 +33,6 @@ var (
 type Options struct {
 	ListenIP   string `flag:"listen-ip"`
 	ListenPort int    `flag:"listen-port"`
-}
-
-type ConnectData struct {
-	Filename string
-	FilePath string
-	FileMD5  string
-}
-
-type FileData struct {
-	FilePackets int
-	PacketIndex int
-	FileOffset  int
-	Filename    string
-	FilePath    string
-	PacketMD5   string
-	Data        string
-}
-
-// object udpclient
-type UdpClient struct {
-	ServerIP   string
-	ServerPort int
-	ServerAddr string
-	Conn       net.Conn
-}
-
-func (uc *UdpClient) SetIP(ip string) {
-	uc.ServerIP = ip
-	uc.ServerAddr = uc.ServerIP + ":" + string(uc.ServerPort)
-}
-
-func (uc *UdpClient) SetPort(port int) {
-	uc.ServerPort = port
-	uc.ServerAddr = uc.ServerIP + ":" + string(uc.ServerPort)
-}
-func (uc *UdpClient) SetAddr(addr string) error {
-	arr := strings.Split(addr, ":")
-	if len(arr) != 2 {
-		return errors.New("addr not correct")
-	}
-	uc.ServerIP = arr[0]
-	uc.ServerPort, _ = strconv.Atoi(arr[1])
-	uc.ServerAddr = addr
-	return nil
-}
-func (uc *UdpClient) Connect() error {
-	var err error
-	uc.Conn, err = net.Dial("udp", uc.ServerAddr)
-	return err
-}
-
-func (uc UdpClient) SendData(data []byte) {
-	uc.Conn.Write(data)
 }
 
 func main() {
@@ -117,15 +63,12 @@ func main() {
 		// read data
 		data := make([]byte, 4096)
 		dataCount, remoteAddr, err := socket.ReadFromUDP(data)
-		fmt.Println(remoteAddr)
 		if err != nil {
 			fmt.Println("read data failed!", err)
 			continue
 		}
 
-		go sendFunc(remoteAddr)
-		// put connection to channel
-		connectionChannel <- data[:dataCount]
+		go doFunc(remoteAddr, data[:dataCount])
 	}
 }
 
@@ -162,39 +105,43 @@ func isFileSame(filename string, filemd5 string) (bool, error) {
 	return result, err
 }
 
-func sendUdp(remoteAddr *net.UDPAddr) {
-	udpclient := &UdpClient{}
-	udpclient.SetAddr(remoteAddr.String())
-	udpclient.Connect()
-	udpclient.SendData([]byte("Hello world!"))
-}
+func doFunc(remoteAddr *net.UDPAddr, data []byte) {
+	var conndata model.ConnectData
+	json.Unmarshal(data, &conndata)
+	filename := conndata.Filename
+	filepath := conndata.FilePath
+	filemd5 := conndata.FileMD5
+	if filename == "" || filepath == "" {
+		return
+	} else {
+		udpclient := &handler.UdpClient{}
+		udpclient.SetAddr(remoteAddr.String())
+		udpclient.Connect()
 
-func sendFunc(remoteAddr *net.UDPAddr) {
-	for {
-		data := <-connectionChannel
-
-		sendUdp(remoteAddr)
-		var conndata ConnectData
-		json.Unmarshal(data, &conndata)
-		filename := conndata.Filename
-		filepath := conndata.FilePath
-		filemd5 := conndata.FileMD5
-		if filename == "" || filepath == "" {
-			continue
-		} else {
-			realfile := fpath.Join(filepath, filename)
-			isExist, _ := isFileExist(realfile)
-			if isExist {
-				result, err := isFileSame(realfile, filemd5)
-				if err != nil {
-					panic("open file error")
-				}
-				if result {
-
-				} else {
-
-				}
+		realfile := fpath.Join(filepath, filename)
+		isExist, _ := isFileExist(realfile)
+		if isExist {
+			result, err := isFileSame(realfile, filemd5)
+			if err != nil {
+				panic("open file error")
 			}
+			if result {
+				rdata := model.ReturnData{Filename: conndata.Filename, Status: proto.EXIST}
+				retData, _ := json.Marshal(rdata)
+				udpclient.SendData([]byte(retData))
+			} else {
+				rdata := model.ReturnData{Filename: conndata.Filename, Status: proto.ACK}
+				retData, _ := json.Marshal(rdata)
+				udpclient.SendData([]byte(retData))
+				fileclient := handler.FileClient{UC: udpclient}
+				fileclient.Recv()
+			}
+		} else {
+			rdata := model.ReturnData{Filename: conndata.Filename, Status: proto.ACK}
+			retData, _ := json.Marshal(rdata)
+			udpclient.SendData([]byte(retData))
+			fileclient := handler.FileClient{UC: udpclient}
+			fileclient.Recv()
 		}
 	}
 }

@@ -1,0 +1,13 @@
+package proto
+
+const (
+	SYN = iota
+	ACK
+	BROKEN
+	EXIST
+	BLOCK
+	BLOCKACK
+	BLOCKNOTCORRENT
+	COMPLETE
+	FAILED
+)
