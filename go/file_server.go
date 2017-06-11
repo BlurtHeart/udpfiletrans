@@ -133,14 +133,23 @@ func doFunc(remoteAddr *net.UDPAddr, data []byte) {
 				rdata := model.ReturnData{Filename: conndata.Filename, Status: proto.ACK}
 				retData, _ := json.Marshal(rdata)
 				udpclient.SendData([]byte(retData))
-				fileclient := handler.FileClient{UC: udpclient}
+				fileclient := handler.FileClient{
+					UC:          udpclient,
+					Filename:    realfile,
+					FileMD5:     conndata.FileMD5,
+					FilePackets: conndata.FilePackets}
+				fileclient.SetIsFile(true)
 				fileclient.Recv()
 			}
 		} else {
 			rdata := model.ReturnData{Filename: conndata.Filename, Status: proto.ACK}
 			retData, _ := json.Marshal(rdata)
 			udpclient.SendData([]byte(retData))
-			fileclient := handler.FileClient{UC: udpclient}
+			fileclient := handler.FileClient{
+				UC:          udpclient,
+				Filename:    realfile,
+				FileMD5:     conndata.FileMD5,
+				FilePackets: conndata.FilePackets}
 			fileclient.Recv()
 		}
 	}

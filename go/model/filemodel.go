@@ -1,10 +1,11 @@
 package model
 
 type ConnectData struct {
-	Filename string `json:"filename"`
-	FilePath string `json:"filepath"`
-	FileMD5  string `json:"filemd5"`
-	Status   int    `json:"status"`
+	Filename    string `json:"filename"`
+	FilePath    string `json:"filepath"`
+	FileMD5     string `json:"filemd5"`
+	FilePackets int    `json:"file_packets"`
+	Status      int    `json:"status"`
 }
 
 type ReturnData struct {
@@ -14,11 +15,10 @@ type ReturnData struct {
 }
 
 type FileData struct {
-	FilePackets int
-	PacketIndex int
-	FileOffset  int
-	Filename    string
-	FilePath    string
-	PacketMD5   string
-	Data        string
+	PacketIndex int    `json:"packet_index"`
+	FileOffset  int    `json:"file_offset"`
+	Filename    string `json:"filename"`
+	FilePath    string `json:"filepath"`
+	PacketMD5   string `json:"packet_md5"`
+	Data        string `json:"data"`
 }
