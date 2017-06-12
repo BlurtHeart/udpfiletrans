@@ -19,6 +19,5 @@ type FileData struct {
 	FileOffset  int    `json:"file_offset"`
 	Filename    string `json:"filename"`
 	FilePath    string `json:"filepath"`
-	PacketMD5   string `json:"packet_md5"`
-	Data        string `json:"data"`
+	Body        string `json:"body"`
 }

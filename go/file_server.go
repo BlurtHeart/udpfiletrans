@@ -87,12 +87,12 @@ func isFileSame(filename string, filemd5 string) (bool, error) {
 	result := false
 	fp, err := os.Open(filename)
 	if err != nil {
-		panic("File not found")
+		return result, err
 	}
 	defer fp.Close()
 	body, err := ioutil.ReadAll(fp)
 	if err != nil {
-		panic("Read file error")
+		return result, err
 	}
 	md5Ctx := md5.New()
 	md5Ctx.Write(body)
@@ -123,23 +123,27 @@ func doFunc(remoteAddr *net.UDPAddr, data []byte) {
 		if isExist {
 			result, err := isFileSame(realfile, filemd5)
 			if err != nil {
-				panic("open file error")
+				return
 			}
 			if result {
 				rdata := model.ReturnData{Filename: conndata.Filename, Status: proto.EXIST}
 				retData, _ := json.Marshal(rdata)
 				udpclient.SendData([]byte(retData))
+				fmt.Println("result:", true)
 			} else {
 				rdata := model.ReturnData{Filename: conndata.Filename, Status: proto.ACK}
 				retData, _ := json.Marshal(rdata)
 				udpclient.SendData([]byte(retData))
 				fileclient := handler.FileClient{
 					UC:          udpclient,
-					Filename:    realfile,
+					Filename:    conndata.Filename,
 					FileMD5:     conndata.FileMD5,
-					FilePackets: conndata.FilePackets}
+					FilePackets: conndata.FilePackets,
+					FilePath:    conndata.FilePath,
+				}
 				fileclient.SetIsFile(true)
-				fileclient.Recv()
+				result := fileclient.Recv()
+				fmt.Println("result:", result)
 			}
 		} else {
 			rdata := model.ReturnData{Filename: conndata.Filename, Status: proto.ACK}
@@ -147,10 +151,13 @@ func doFunc(remoteAddr *net.UDPAddr, data []byte) {
 			udpclient.SendData([]byte(retData))
 			fileclient := handler.FileClient{
 				UC:          udpclient,
-				Filename:    realfile,
+				Filename:    conndata.Filename,
 				FileMD5:     conndata.FileMD5,
-				FilePackets: conndata.FilePackets}
-			fileclient.Recv()
+				FilePackets: conndata.FilePackets,
+				FilePath:    conndata.FilePath,
+			}
+			result := fileclient.Recv()
+			fmt.Println("result:", result)
 		}
 	}
 }
