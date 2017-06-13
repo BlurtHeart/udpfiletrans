@@ -142,6 +142,7 @@ func (fc *FileClient) handle() bool {
 					PacketIndex: fdata.PacketIndex,
 				}
 				_, err := fc.fp.WriteAt([]byte(fdata.Body), int64(fdata.FileOffset))
+				fmt.Println("write data:", fdata.PacketIndex)
 				if err != nil {
 					fmt.Println(err)
 					rdata.Status = proto.BLOCKNOTCORRENT
@@ -165,14 +166,16 @@ func (fc *FileClient) handle() bool {
 		}
 	}
 	// check md5
-	md5Ctx := md5.New()
-	if _, err := io.Copy(md5Ctx, fc.fp); err != nil {
-		isFinished = false
-		fmt.Println(err)
-	}
-	checkmd5 := md5Ctx.Sum(nil)
-	if !(hex.EncodeToString(checkmd5) == fc.FileMD5) {
-		isFinished = false
+	if isFinished {
+		md5Ctx := md5.New()
+		if _, err := io.Copy(md5Ctx, fc.fp); err != nil {
+			isFinished = false
+			fmt.Println(err)
+		}
+		checkmd5 := md5Ctx.Sum(nil)
+		if !(hex.EncodeToString(checkmd5) == fc.FileMD5) {
+			isFinished = false
+		}
 	}
 	return isFinished
 }
@@ -182,6 +185,7 @@ func (fc *FileClient) Recv() bool {
 	if !checkResult {
 		return false
 	}
+
 	fc.channel = make(chan []byte, 10000)
 	defer close(fc.channel)
 

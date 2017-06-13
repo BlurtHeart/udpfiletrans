@@ -125,18 +125,16 @@ func main() {
 	for i := 0; i < header.FilePackets; i++ {
 		n, err := r.Read(buf)
 		if err != nil && err != io.EOF {
-			fmt.Println("err 1:", err)
 			break
 		}
 		if 0 == n {
-			fmt.Println("read 0")
 			break
 		}
-		filedata.Body = string(buf[:n])
+		filedata.Body = buf[:n]
 		filedata.PacketIndex = i
 		filedata.FileOffset = i * 1024
 		filedata.Status = proto.BLOCK
 		retdata, _ := json.Marshal(filedata)
-		conn.WriteToUDP([]byte(retdata), remoteAddr)
+		conn.WriteToUDP(retdata, remoteAddr)
 	}
 }
