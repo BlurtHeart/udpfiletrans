@@ -118,16 +118,8 @@ func (fc *FileClient) handle() bool {
 	defer fc.fp.Close()
 
 	for {
-		for i := 0; i < fc.FilePackets; i++ {
-			if _, ok := receivedPackets[i]; ok {
-				if i == fc.FilePackets-1 {
-					isFinished = true
-				}
-			} else {
-				break
-			}
-		}
-		if isFinished == true {
+		if len(receivedPackets) == fc.FilePackets {
+			isFinished = true
 			fc.isOver = true
 			break
 		}

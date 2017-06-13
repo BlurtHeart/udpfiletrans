@@ -74,13 +74,6 @@ func main() {
 	}
 	filemd5 := hex.EncodeToString(md5Ctx.Sum(nil))
 
-	// saddr, err := net.ResolveUDPAddr("udp", opts.ServerAddr)
-	// conn, err := net.DialUDP("udp", nil, saddr)
-	// if err != nil {
-	// 	log.Fatalf("ERROR:failed to establish udp socket: %s", err.Error())
-	// }
-	// defer conn.Close()
-
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{
 		IP:   net.ParseIP(opts.ListenIP),
 		Port: opts.ListenPort,
