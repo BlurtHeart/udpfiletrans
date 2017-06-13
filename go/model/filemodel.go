@@ -20,4 +20,5 @@ type FileData struct {
 	Filename    string `json:"filename"`
 	FilePath    string `json:"filepath"`
 	Body        string `json:"body"`
+	Status      int    `json:"status"`
 }

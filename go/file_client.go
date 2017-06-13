@@ -24,9 +24,13 @@ var (
 	flagSet = flag.NewFlagSet("udp transfer file", flag.ExitOnError)
 	config  = flagSet.String("config", "", "config file")
 
-	send_path  = flagSet.String("send-path", "", "path of sending file")
-	recv_path  = flagSet.String("recv-path", "", "path of recving file")
-	filename   = flagSet.String("filename", "", "file that will send")
+	// client
+	send_path   = flagSet.String("send-path", "", "path of sending file")
+	recv_path   = flagSet.String("recv-path", "", "path of recving file")
+	filename    = flagSet.String("filename", "", "file that will send")
+	listen_ip   = flagSet.String("listen-ip", "127.0.0.1", "listen ip addr")
+	listen_port = flagSet.Int("listen-port", 12345, "listen port")
+	// server
 	serveraddr = flagSet.String("serveraddr", "127.0.0.1:12345", "server address")
 )
 
@@ -34,6 +38,9 @@ type Options struct {
 	SendPath   string `flag:"send-path"`
 	RecvPath   string `flag:"recv-path"`
 	Filename   string `flag:"filename"`
+	ListenIP   string `flag:"listen-ip"`
+	ListenPort int    `flag:"listen-port"`
+
 	ServerAddr string `flag:"serveraddr"`
 }
 
@@ -67,14 +74,24 @@ func main() {
 	}
 	filemd5 := hex.EncodeToString(md5Ctx.Sum(nil))
 
-	r := bufio.NewReader(fp)
+	// saddr, err := net.ResolveUDPAddr("udp", opts.ServerAddr)
+	// conn, err := net.DialUDP("udp", nil, saddr)
+	// if err != nil {
+	// 	log.Fatalf("ERROR:failed to establish udp socket: %s", err.Error())
+	// }
+	// defer conn.Close()
 
-	saddr, err := net.ResolveUDPAddr("udp", opts.ServerAddr)
-	conn, err := net.DialUDP("udp", nil, saddr)
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{
+		IP:   net.ParseIP(opts.ListenIP),
+		Port: opts.ListenPort,
+	})
 	if err != nil {
-		log.Fatalf("ERROR:failed to establish udp socket: %s", err.Error())
+		fmt.Println("listen failed", err)
+		return
 	}
 	defer conn.Close()
+
+	serveraddr, _ := net.ResolveUDPAddr("udp", opts.ServerAddr)
 
 	header := model.ConnectData{
 		Status:      proto.SYN,
@@ -85,44 +102,41 @@ func main() {
 	}
 
 	rdata, _ := json.Marshal(header)
-	conn.Write([]byte(rdata))
+
+	conn.WriteToUDP([]byte(rdata), serveraddr)
 
 	// wait for ack
 	data := make([]byte, 1024)
-	fmt.Println(conn.LocalAddr())
-	fmt.Println(conn.RemoteAddr())
 	dataCount, remoteAddr, err := conn.ReadFromUDP(data)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("read over")
 	var ackData model.ReturnData
 	json.Unmarshal(data[:dataCount], &ackData)
-	fmt.Println(ackData)
-
-	conn2, err := net.DialUDP("udp", nil, remoteAddr)
-	if err != nil {
-		log.Fatalf("ERROR:failed to establish udp socket: %s", err.Error())
-	}
-	defer conn2.Close()
 
 	filedata := model.FileData{
 		Filename: opts.Filename,
 		FilePath: opts.RecvPath,
 	}
+
 	buf := make([]byte, 1024)
+	fp.Seek(0, 0)
+	r := bufio.NewReader(fp)
 	for i := 0; i < header.FilePackets; i++ {
 		n, err := r.Read(buf)
 		if err != nil && err != io.EOF {
+			fmt.Println("err 1:", err)
 			break
 		}
 		if 0 == n {
+			fmt.Println("read 0")
 			break
 		}
 		filedata.Body = string(buf[:n])
 		filedata.PacketIndex = i
 		filedata.FileOffset = i * 1024
+		filedata.Status = proto.BLOCK
 		retdata, _ := json.Marshal(filedata)
-		conn2.Write([]byte(retdata))
+		conn.WriteToUDP([]byte(retdata), remoteAddr)
 	}
 }
