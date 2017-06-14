@@ -101,7 +101,7 @@ func (fc *FileClient) preCheck() bool {
 	} else {
 		realfile := fpath.Join(fc.FilePath, fc.Filename)
 		var err error
-		fc.fp, err = os.OpenFile(realfile, os.O_RDWR, 0655)
+		fc.fp, err = os.OpenFile(realfile, os.O_TRUNC|os.O_RDWR, 0655)
 		if err != nil {
 			return false
 		}
@@ -114,8 +114,9 @@ func (fc *FileClient) handle() bool {
 	var receivedPackets map[int]bool
 	receivedPackets = make(map[int]bool)
 
-	isFinished := false
 	defer fc.fp.Close()
+
+	isFinished := false
 
 	for {
 		if len(receivedPackets) == fc.FilePackets {
@@ -134,7 +135,6 @@ func (fc *FileClient) handle() bool {
 					PacketIndex: fdata.PacketIndex,
 				}
 				_, err := fc.fp.WriteAt([]byte(fdata.Body), int64(fdata.FileOffset))
-				fmt.Println("write data:", fdata.PacketIndex)
 				if err != nil {
 					fmt.Println(err)
 					rdata.Status = proto.BLOCKNOTCORRENT
@@ -155,18 +155,6 @@ func (fc *FileClient) handle() bool {
 		}
 		if fc.isOver == true {
 			break
-		}
-	}
-	// check md5
-	if isFinished {
-		md5Ctx := md5.New()
-		if _, err := io.Copy(md5Ctx, fc.fp); err != nil {
-			isFinished = false
-			fmt.Println(err)
-		}
-		checkmd5 := md5Ctx.Sum(nil)
-		if !(hex.EncodeToString(checkmd5) == fc.FileMD5) {
-			isFinished = false
 		}
 	}
 	return isFinished
@@ -204,5 +192,20 @@ func (fc *FileClient) Recv() bool {
 		}
 	}
 	wg.Wait()
+	// check md5
+	if result {
+		realfile := fpath.Join(fc.FilePath, fc.Filename)
+		fp, _ := os.OpenFile(realfile, os.O_RDWR, 0655)
+		defer fp.Close()
+		md5Ctx := md5.New()
+		if _, err := io.Copy(md5Ctx, fp); err != nil {
+			result = false
+			fmt.Println(err)
+		}
+		checkmd5 := md5Ctx.Sum(nil)
+		if !(hex.EncodeToString(checkmd5) == fc.FileMD5) {
+			result = false
+		}
+	}
 	return result
 }
