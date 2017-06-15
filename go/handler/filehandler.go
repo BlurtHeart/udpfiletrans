@@ -207,5 +207,15 @@ func (fc *FileClient) Recv() bool {
 			result = false
 		}
 	}
+	rdata := model.ReturnData{
+		Filename: fc.Filename,
+	}
+	if result {
+		rdata.Status = proto.COMPLETE
+	} else {
+		rdata.Status = proto.FAILED
+	}
+	retdata, _ := json.Marshal(rdata)
+	fc.UC.SendData([]byte(retdata))
 	return result
 }

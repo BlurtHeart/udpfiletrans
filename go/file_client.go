@@ -12,6 +12,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"go/model"
 	"go/proto"
@@ -106,11 +108,23 @@ func main() {
 	}
 	var ackData model.ReturnData
 	json.Unmarshal(data[:dataCount], &ackData)
+	if ackData.Status == proto.EXIST {
+		fmt.Println("send result:", true)
+		return
+	}
 
 	filedata := model.FileData{
 		Filename: opts.Filename,
 		FilePath: opts.RecvPath,
 	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	result := false
+	go func() {
+		result = handleRetry(conn, opts, realFile, remoteAddr)
+		wg.Done()
+	}()
 
 	buf := make([]byte, 1024)
 	fp.Seek(0, 0)
@@ -129,5 +143,46 @@ func main() {
 		filedata.Status = proto.BLOCK
 		retdata, _ := json.Marshal(filedata)
 		conn.WriteToUDP(retdata, remoteAddr)
+	}
+	wg.Wait()
+	fmt.Println("send resutl:", result)
+}
+
+func handleRetry(c *net.UDPConn, opts *Options, filename string, remoteAddr *net.UDPAddr) bool {
+	fp, err := os.Open(filename)
+	if err != nil {
+		return false
+	}
+	defer fp.Close()
+
+	data := make([]byte, 2048)
+	for {
+		t := time.Now()
+		c.SetReadDeadline(t.Add(time.Duration(3 * time.Second)))
+		dataCount, _ := c.Read(data)
+		if dataCount == 0 {
+			continue
+		}
+		var rdata model.ReturnData
+		json.Unmarshal(data[:dataCount], &rdata)
+		switch rdata.Status {
+		case proto.COMPLETE:
+			return true
+		case proto.BLOCKNOTCORRENT:
+			filedata := model.FileData{
+				Filename:    opts.Filename,
+				FilePath:    opts.RecvPath,
+				PacketIndex: rdata.PacketIndex,
+				Status:      proto.BLOCK,
+				FileOffset:  rdata.PacketIndex * 1024,
+			}
+			body := make([]byte, 1024)
+			fp.Seek(int64(filedata.FileOffset), 0)
+			n, _ := fp.Read(body)
+			filedata.Body = body[:n]
+			retdata, _ := json.Marshal(filedata)
+			c.WriteToUDP(retdata, remoteAddr)
+		default:
+		}
 	}
 }
