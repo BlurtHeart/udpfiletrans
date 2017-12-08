@@ -12,9 +12,9 @@ import (
 	"os"
 	fpath "path/filepath"
 
-	"go/handler"
-	"go/model"
-	"go/proto"
+	"github.com/blurty/sftp/handler"
+	"github.com/blurty/sftp/model"
+	"github.com/blurty/sftp/proto"
 
 	"github.com/BurntSushi/toml"
 	"github.com/mreiferson/go-options"

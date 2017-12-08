@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"go/model"
-	"go/proto"
+	"github.com/blurty/sftp/model"
+	"github.com/blurty/sftp/proto"
 
 	"github.com/BurntSushi/toml"
 	"github.com/mreiferson/go-options"
