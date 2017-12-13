@@ -4,10 +4,15 @@
 
 通过UDP来在两台服务器之间传输文件。
 
-## Code Structure
+## Disclaimer
 
-1. proto:数据交互协议
-2. model:数据交互数据结构
-3. handler:数据传输
-4. client:文件发送客户端
-5. server:文件发送服务端
+Inspired by [tftp](https://github.com/pin/tftp)
+
+tftp implemented by [pin](https://github.com/pin) is very good. 
+I don't intend to modify it, but just to add some controls on UDP 
+to assure file tranfer.
+
+Document will given later...
+
+Code is in progress, so it will continue evolving little by little 
+and at this point I'm not really looking for contributions.
