@@ -12,7 +12,7 @@ type Client struct {
 	addr    *net.UDPAddr
 	timeout time.Duration
 	retries int
-	// backoff backoffFunc
+	backoff backoffFunc
 	blksize int
 	tsize   bool
 }
@@ -47,6 +47,12 @@ func (c *Client) SetRetries(count int) {
 	c.retries = count
 }
 
+// SetBackoff sets a user provided function that is called to provide a
+// backoff duration prior to retransmitting an unacknowledged packet.
+func (c *Client) SetBackoff(h backoffFunc) {
+	c.backoff = h
+}
+
 // Send starts outgoing file transmission. It returns io.ReaderFrom or error.
 func (c Client) Send(filename string, mode string) (io.ReaderFrom, error) {
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{})
@@ -57,6 +63,7 @@ func (c Client) Send(filename string, mode string) (io.ReaderFrom, error) {
 		send:    make([]byte, defaultLength),
 		receive: make([]byte, defaultLength),
 		conn:    conn,
+		retry:   &backoff{handler: c.backoff},
 		timeout: c.timeout,
 		retries: c.retries,
 		addr:    c.addr,

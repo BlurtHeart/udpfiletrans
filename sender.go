@@ -10,8 +10,6 @@ import (
 )
 
 const (
-	defaultTimeout   = 5 * time.Second
-	defaultRetries   = 5
 	defaultLength    = 516
 	defaultBlockSize = 512
 	largeBlockSize   = 65464
@@ -23,6 +21,8 @@ type sender struct {
 	localIP net.IP
 	send    []byte
 	receive []byte
+	tid     int
+	retry   *backoff
 	timeout time.Duration
 	retries int
 	block   uint16
@@ -151,10 +151,11 @@ func (s *sender) sendOptions() error {
 }
 
 func (s *sender) sendWithRetry(l int) (*net.UDPAddr, error) {
+	s.retry.reset()
 	for {
-		// here code for retry needed
 		addr, err := s.sendDatagram(l)
-		if _, ok := err.(net.Error); ok {
+		if _, ok := err.(net.Error); ok && s.retry.count() < s.retries {
+			s.retry.backoff()
 			continue
 		}
 		return addr, nil
@@ -175,13 +176,14 @@ func (s *sender) sendDatagram(l int) (*net.UDPAddr, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !addr.IP.Equal(s.addr.IP) {
+		if !addr.IP.Equal(s.addr.IP) || (s.tid != 0 && addr.Port != s.tid) {
 			continue
 		}
 		p, err := parsePacket(s.receive[:n])
 		if err != nil {
 			continue
 		}
+		s.tid = addr.Port
 		switch p := p.(type) {
 		case pACK:
 			if p.block() == s.block {
@@ -216,12 +218,11 @@ func (s *sender) abort(err error) error {
 	if s.conn == nil {
 		return nil
 	}
+	defer func() {
+		s.conn.Close()
+		s.conn = nil
+	}()
 	n := packERROR(s.send, 1, err.Error())
 	_, err = s.conn.WriteToUDP(s.send[:n], s.addr)
-	if err != nil {
-		return err
-	}
-	s.conn.Close()
-	s.conn = nil
-	return nil
+	return err
 }
