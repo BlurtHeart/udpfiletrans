@@ -6,37 +6,32 @@ import (
 	"os"
 )
 
-type file struct {
+type filer struct {
 	filename string
 	md5      string // 16 bytes
 	filesize int64
 }
 
-// return if file exists and file size name
-func (f file) checkFileSize() bool {
-	info, err := os.Stat(f.filename)
+// return a new filer pointer
+func NewFiler(filename string) (*filer, error) {
+	// get file size
+	info, err := os.Stat(filename)
 	if err != nil {
-		return false
+		return nil, err
 	}
-	if info.Size() == f.filesize {
-		return true
-	}
-	return false
-}
-
-// return if file md5 is same
-func (f file) checkFileMd5() bool {
-	fp, err := os.Open(f.filename)
+	// calculate file md5
+	fp, err := os.Open(filename)
 	if err != nil {
-		return false
+		return nil, err
 	}
 	defer fp.Close()
 	h := md5.New()
 	if _, err = io.Copy(h, fp); err != nil {
-		return false
+		return nil, err
 	}
-	if string(h.Sum(nil)) == f.md5 {
-		return true
-	}
-	return false
+	return &filer{
+		filename: filename,
+		md5:      string(h.Sum(nil)),
+		filesize: info.Size(),
+	}, nil
 }
