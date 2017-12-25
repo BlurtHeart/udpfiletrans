@@ -22,23 +22,19 @@ const (
 
 type options map[string]string
 
-// RRQ/WRQ packet
+// RRQ packet
 //
-//  2 bytes     string    1 byte    string    1 byte
-// --------------------------------------------------
-// | Opcode |  Filename  |   0  |    Mode    |   0  |
-// --------------------------------------------------
+//  2 bytes     string    1 byte
+// ------------------------------
+// | Opcode |  fileinfo  |   0  |
+// ------------------------------
 type pRRQ []byte
-type pWRQ []byte
 
-// packRQ returns length of the packet in b
-func packRQ(p []byte, op uint16, filename, mode string, opts options) int {
-	binary.BigEndian.PutUint16(p, op)
+// packRRQ returns length of the packet in b
+func packRRQ(p []byte, fileinfo []byte, opts options) int {
+	binary.BigEndian.PutUint16(p, opRRQ)
 	n := 2
-	n += copy(p[2:len(p)-10], filename)
-	p[n] = 0
-	n++
-	n += copy(p[n:], mode)
+	n += copy(p[n:], fileinfo)
 	p[n] = 0
 	n++
 	for name, value := range opts {
@@ -52,21 +48,62 @@ func packRQ(p []byte, op uint16, filename, mode string, opts options) int {
 	return n
 }
 
-func unpackRQ(p []byte) (filename, mode string, opts options, err error) {
+func unpackRRQ(p pRRQ) (fileinfo []byte, opts options, err error) {
 	bs := bytes.Split(p[2:], []byte{0})
-	if len(bs) < 2 {
-		return "", "", nil, fmt.Errorf("mssing filename or mode")
+	if len(bs) < 1 {
+		return "", nil, fmt.Errorf("mssing filename")
 	}
-	filename = string(bs[0])
-	mode = string(bs[1])
-	if len(bs) < 4 {
-		return filename, mode, nil, nil
+	fileinfo = bs[0]
+	if len(bs) < 3 {
+		return fileinfo, nil, nil
 	}
 	opts = make(options)
-	for i := 2; i+1 < len(bs); i += 2 {
+	for i := 1; i+1 < len(bs); i += 2 {
 		opts[string(bs[i])] = string(bs[i+1])
 	}
-	return filename, mode, opts, nil
+	return fileinfo, opts, nil
+}
+
+// WRQ packet
+//
+//  2 bytes     string    1 byte
+// ------------------------------
+// | Opcode |  fileinfo  |   0  |
+// ------------------------------
+type pWRQ []byte
+
+// packWRQ returns length of the packet in b
+func packWRQ(p []byte, fileinfo []byte, opts options) int {
+	binary.BigEndian.PutUint16(p, opWRQ)
+	n := 2
+	n += copy(p[n:], fileinfo)
+	p[n] = 0
+	n++
+	for name, value := range opts {
+		n += copy(p[n:], name)
+		p[n] = 0
+		n++
+		n += copy(p[n:], value)
+		p[n] = 0
+		n++
+	}
+	return n
+}
+
+func unpackWRQ(p pWRQ) (fileinfo []byte, opts options, err error) {
+	bs := bytes.Split(p[2:], []byte{0})
+	if len(bs) < 1 {
+		return "", nil, fmt.Errorf("mssing filename")
+	}
+	fileinfo = bs[0]
+	if len(bs) < 3 {
+		return fileinfo, nil, nil
+	}
+	opts = make(options)
+	for i := 1; i+1 < len(bs); i += 2 {
+		opts[string(bs[i])] = string(bs[i+1])
+	}
+	return fileinfo, opts, nil
 }
 
 // OACK packet
@@ -90,7 +127,7 @@ func packOACK(p []byte, opts options) int {
 	return n
 }
 
-func unpackOACK(p []byte) (options, error) {
+func unpackOACK(p pOACK) (options, error) {
 	bs := bytes.Split(p[2:], []byte{0})
 	opts := make(options)
 	for i := 0; i+1 < len(bs); i += 2 {
