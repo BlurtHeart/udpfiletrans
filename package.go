@@ -22,59 +22,18 @@ const (
 
 type options map[string]string
 
-// RRQ packet
+// RRQ/WRQ packet
 //
 //  2 bytes     string    1 byte
 // ------------------------------
 // | Opcode |  fileinfo  |   0  |
 // ------------------------------
 type pRRQ []byte
-
-// packRRQ returns length of the packet in b
-func packRRQ(p []byte, fileinfo []byte, opts options) int {
-	binary.BigEndian.PutUint16(p, opRRQ)
-	n := 2
-	n += copy(p[n:], fileinfo)
-	p[n] = 0
-	n++
-	for name, value := range opts {
-		n += copy(p[n:], name)
-		p[n] = 0
-		n++
-		n += copy(p[n:], value)
-		p[n] = 0
-		n++
-	}
-	return n
-}
-
-func unpackRRQ(p pRRQ) (fileinfo []byte, opts options, err error) {
-	bs := bytes.Split(p[2:], []byte{0})
-	if len(bs) < 1 {
-		return "", nil, fmt.Errorf("mssing filename")
-	}
-	fileinfo = bs[0]
-	if len(bs) < 3 {
-		return fileinfo, nil, nil
-	}
-	opts = make(options)
-	for i := 1; i+1 < len(bs); i += 2 {
-		opts[string(bs[i])] = string(bs[i+1])
-	}
-	return fileinfo, opts, nil
-}
-
-// WRQ packet
-//
-//  2 bytes     string    1 byte
-// ------------------------------
-// | Opcode |  fileinfo  |   0  |
-// ------------------------------
 type pWRQ []byte
 
-// packWRQ returns length of the packet in b
-func packWRQ(p []byte, fileinfo []byte, opts options) int {
-	binary.BigEndian.PutUint16(p, opWRQ)
+// packRQ returns length of the packet in b
+func packRQ(p []byte, opcode uint16, fileinfo []byte, opts options) int {
+	binary.BigEndian.PutUint16(p, opcode)
 	n := 2
 	n += copy(p[n:], fileinfo)
 	p[n] = 0
@@ -90,10 +49,11 @@ func packWRQ(p []byte, fileinfo []byte, opts options) int {
 	return n
 }
 
-func unpackWRQ(p pWRQ) (fileinfo []byte, opts options, err error) {
+// unsafe operation for unclear type of p
+func unpackRQ(p []byte) (fileinfo []byte, opts options, err error) {
 	bs := bytes.Split(p[2:], []byte{0})
 	if len(bs) < 1 {
-		return "", nil, fmt.Errorf("mssing filename")
+		return nil, nil, fmt.Errorf("mssing filename")
 	}
 	fileinfo = bs[0]
 	if len(bs) < 3 {
@@ -104,6 +64,16 @@ func unpackWRQ(p pWRQ) (fileinfo []byte, opts options, err error) {
 		opts[string(bs[i])] = string(bs[i+1])
 	}
 	return fileinfo, opts, nil
+}
+
+// unpack RRQ package
+func unpackRRQ(p pRRQ) (fileinfo []byte, opts options, err error) {
+	return unpackRQ(p)
+}
+
+// unpack WRQ package
+func unpackWRQ(p pWRQ) (fileinfo []byte, opts options, err error) {
+	return unpackRQ(p)
 }
 
 // OACK packet
