@@ -15,8 +15,10 @@ const (
 )
 
 const (
-	stateNO  = uint8(0) // do not transfer
-	stateYES = uint8(1) // transfer
+	stateSync     = uint8(0) // sync
+	stateNO       = uint8(1) // do not transfer
+	stateYES      = uint8(2) // transfer
+	stateComplete = uint8(8) // transfer complete
 )
 
 type Filer struct {
@@ -51,6 +53,31 @@ func NewFiler(filename string) (*Filer, error) {
 		MD5:      string(h.Sum(nil)),
 		FileSize: info.Size(),
 		FileMode: uint32(info.Mode().Perm()),
-		State:    stateYES,
+		State:    stateSync,
 	}, nil
+}
+
+func isSameFiler(local Filer, remote Filer) bool {
+	return local.Filename == remote.Filename && local.FileSize == remote.FileSize && local.MD5 == remote.MD5
+}
+
+func isHalfFiler(local Filer, remote Filer) bool {
+	if local.Filename != remote.Filename || local.FileSize < remote.FileSize {
+		return false
+	}
+	fp, err := os.Open(local.Filename)
+	if err != nil {
+		return false
+	}
+	defer fp.Close()
+	h := md5.New()
+	n, err := io.CopyN(h, fp, remote.FileSize)
+	if err != nil || n != remote.FileSize {
+		return false
+	}
+	if remote.MD5 == string(h.Sum(nil)) {
+		return true
+	} else {
+		return false
+	}
 }

@@ -95,7 +95,7 @@ func (r *receiver) setBlockSize(blksize string) error {
 	if n < defaultBlockSize {
 		return fmt.Errorf("blksize too small: %d", n)
 	}
-	if n > largeBlockSize {
+	if n > maxBlockSize {
 		return fmt.Errorf("blksize tool large: %d", n)
 	}
 	r.receive = make([]byte, n+4)

@@ -1,37 +1,82 @@
 package sftp
 
 import (
-	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 )
 
 const (
-	defaultLength    = 516
+	defaultBlockNum  = 5
+	maxBlockNum      = 10
 	defaultBlockSize = 512
-	largeBlockSize   = 65464
+	minBlockSize     = 512
+	maxBlockSize     = 65464
+)
+
+type blocker struct {
+	id    int
+	data  []byte // data in block
+	retry *backoff
+	timer *time.Timer
+}
+
+var (
+	noPermissionError   = errors.New("no permission to read or write file")
+	fileNotExistError   = errors.New("file does not exist")
+	fileNotSame         = errors.New("file not same")
+	serverInternalError = errors.New("server internal error occurred")
 )
 
 type sender struct {
-	conn    *net.UDPConn
-	addr    *net.UDPAddr
-	localIP net.IP
-	send    []byte
-	receive []byte
-	tid     int
-	retry   *backoff
-	timeout time.Duration
-	retries int
-	block   uint16
-	mode    string
-	opts    options
+	blockNum     int // block numbers for sending while waiting for ack
+	blocks       []blocker
+	blockStatus  map[int]bool // status for each block, false for unused and true for used
+	mux          sync.Mutex
+	conn         *net.UDPConn
+	addr         *net.UDPAddr
+	localIP      net.IP
+	receive      []byte
+	receivedSize int
+	tid          int
+	retry        *backoff
+	timeout      time.Duration
+	retries      int
+	mode         string
+	opts         options
+	file         *Filer
+	opcode       uint16
 }
 
-func (s *sender) RemoteAddr() net.UDPAddr { return *s.addr }
-func (s *sender) LocalIP() net.IP         { return s.localIP }
+func (s *sender) setBlockNum(num int) {
+	if num < 1 || num > maxBlockNum {
+		num = defaultBlockNum
+	}
+	if s.blockNum > 0 {
+		for k, _ := range s.blockStatus {
+			delete(s.blockStatus, k)
+		}
+	}
+	s.blockNum = num
+	s.blocks = make([]blocker, num)
+	for i := 0; i < num; i++ {
+		s.blockStatus[i] = false
+	}
+}
+
+func (s *sender) setBlockSize(blksize int) {
+	if blksize < minBlockSize || blksize > maxBlockSize {
+		blksize = defaultBlockSize
+	}
+	for i := 0; i < s.blockNum; i++ {
+		s.blocks[i].data = make([]byte, blksize+4)
+	}
+}
 
 func (s *sender) SetSize(n int64) {
 	if s.opts != nil {
@@ -41,95 +86,141 @@ func (s *sender) SetSize(n int64) {
 	}
 }
 
-func (s *sender) ReadFrom(r io.Reader) (int64, error) {
-	if s.opts != nil {
-		// check that tsize is set
-		if ts, ok := s.opts["tsize"]; ok {
-			// check that tsize is not set with SetSize already
-			i, err := strconv.ParseInt(ts, 10, 64)
-			if err == nil && i == 0 {
-				if rs, ok := r.(io.Seeker); ok {
-					// save the offset of reader
-					pos, err := rs.Seek(0, io.SeekCurrent)
-					if err != nil {
-						return 0, err
-					}
-					// find size and set tsize
-					size, err := rs.Seek(0, io.SeekEnd)
-					if err != nil {
-						return 0, err
-					}
-					s.SetSize(size)
-					// restore the offset of reader
-					_, err = rs.Seek(pos, io.SeekStart)
-					if err != nil {
-						return 0, err
-					}
-				}
-			}
-		}
-		err := s.sendOptions()
-		if err != nil {
-			s.abort(err)
-			return 0, err
-		}
-	}
-	s.block = 1 // start data transmission with block 1
-	var n int64
-	binary.BigEndian.PutUint16(s.send[:2], opDATA)
-	for {
-		l, err := io.ReadFull(r, s.send[4:])
-		n += int64(l)
-		if err != nil && err != io.ErrUnexpectedEOF {
-			if err != io.EOF {
-				s.abort(err)
-				return n, err
-			}
-			binary.BigEndian.PutUint16(s.send[2:4], s.block)
-			_, err := s.sendWithRetry(4)
-			if err != nil {
-				s.abort(err)
-				return n, err
-			}
-			s.conn.Close()
-			return n, nil
-		}
-		binary.BigEndian.PutUint16(s.send[2:4], s.block)
-		_, err = s.sendWithRetry(4 + l)
-		if err != nil {
-			s.abort(err)
-			return n, err
-		}
-		if l < len(s.send)-4 {
-			s.conn.Close()
-			return n, nil
-		}
-		s.block++
-	}
-}
-
-func (s *sender) setBlockSize(blksize string) error {
-	n, err := strconv.Atoi(blksize)
+func (s *sender) shakeHands() error {
+	info, err := json.Marshal(s.file)
 	if err != nil {
 		return err
 	}
-	if n < defaultBlockSize {
-		return fmt.Errorf("blkzise too small: %d", n)
+	n := packRQ(s.blocks[0].data, s.opcode, info, s.opts)
+	s.retry.reset()
+	for {
+		s.sendDatagram(s.blocks[0].data[:n])
+		err := s.recvDatagram()
+		if err != nil {
+			if s.retry.count() < s.retries {
+				s.retry.backoff()
+				continue
+			} else {
+				return err
+			}
+		}
+		// begin parse hand-shake package
+		res, err := parsePacket(s.receive[:s.receivedSize])
+		if err != nil {
+			return err
+		}
+		if s.opcode == opRRQ {
+			if ackData, ok := res.(pRRQ); ok {
+				// check filename, filesize, filemd5, result
+				// if filename equals, but other not equal, return error
+				fdata, opts, err := unpackRRQ(ackData)
+				if err != nil {
+					return err
+				}
+				s.dealOpts(opts)
+				var fi Filer
+				err = json.Unmarshal(fdata, &fi)
+				if err != nil {
+					return err
+				}
+				if fi.Filename != s.file.Filename {
+					return serverInternalError
+				}
+				switch fi.ACK {
+				case ackNPermit:
+					s.file.State = stateNO
+					return noPermissionError
+				case ackNExist:
+					s.file.State = stateNO
+					return fileNotExistError
+				case ackNSame:
+					s.file.State = stateNO
+					info, _ = json.Marshal(s.file)
+					n = packRQ(s.blocks[0].data, s.opcode, info, nil)
+					s.sendDatagram(s.blocks[0].data[:n])
+					return fileNotSame
+				case ackSame:
+					s.file.State = stateYES
+					info, _ = json.Marshal(s.file)
+					n = packRQ(s.blocks[0].data, s.opcode, info, nil)
+					s.sendDatagram(s.blocks[0].data[:n])
+					return nil
+				}
+			} else {
+				s.retry.backoff()
+				continue
+			}
+		} else if s.opcode == opWRQ {
+			if ackData, ok := res.(pWRQ); ok {
+				// check filename, filesize, filemd5, result
+				// if filename equals, but other not equal, return error
+				fdata, opts, err := unpackWRQ(ackData)
+				if err != nil {
+					return err
+				}
+				s.dealOpts(opts)
+				var fi Filer
+				err = json.Unmarshal(fdata, &fi)
+				if err != nil {
+					return err
+				}
+				if fi.Filename != s.file.Filename {
+					return serverInternalError
+				}
+				switch fi.ACK {
+				case ackNPermit:
+					s.file.State = stateNO
+					return noPermissionError
+				case ackNExist:
+					s.file.State = stateYES
+					return nil
+				case ackNSame:
+					s.file.State = stateYES
+					if isHalfFiler(*s.file, fi) {
+						s.file.StartIndex = fi.FileSize + 1
+					} else {
+						s.file.StartIndex = 0
+					}
+					info, _ = json.Marshal(s.file)
+					n = packRQ(s.blocks[0].data, s.opcode, info, nil)
+					s.sendDatagram(s.blocks[0].data[:n])
+					return nil
+				case ackSame:
+					s.file.State = stateComplete
+					return nil
+				}
+			} else {
+				s.retry.backoff()
+				continue
+			}
+		} else {
+			return serverInternalError
+		}
+		return nil
 	}
-	if n > largeBlockSize {
-		return fmt.Errorf("blksize too large: %d", n)
+}
+
+func (s *sender) dealOpts(opts options) {}
+
+func (s *sender) sendRQ() error {
+	info, err := json.Marshal(s.file)
+	if err != nil {
+		return err
 	}
-	s.send = make([]byte, n+4)
+	n := packRQ(s.blocks[0].data, s.opcode, info, s.opts)
+	s.sendDatagram(s.blocks[0].data[:n])
 	return nil
 }
 
 func (s *sender) sendOptions() error {
 	for name, value := range s.opts {
 		if name == "blksize" {
-			err := s.setBlockSize(value)
+			blksize, err := strconv.Atoi(value)
 			if err != nil {
 				delete(s.opts, name)
+				continue
 			}
+			s.setBlockSize(blksize)
 		} else if name == "tsize" {
 			if value != "0" {
 				s.opts["tsize"] = value
@@ -141,77 +232,72 @@ func (s *sender) sendOptions() error {
 		}
 	}
 	if len(s.opts) > 0 {
-		m := packOACK(s.send, s.opts)
-		_, err := s.sendWithRetry(m)
-		if err != nil {
+		m := packOACK(s.blocks[0].data, s.opts)
+		s.retry.reset()
+		for {
+			err := s.sendDatagram(s.blocks[0].data[:m])
+			if err != nil {
+				return err
+			}
+			err = s.recvDatagram()
+			if err == nil {
+				p, err := parsePacket(s.receive[:s.receivedSize])
+				if err == nil {
+					if pack, ok := p.(pOACK); ok {
+						opts, err := unpackOACK(pack)
+						if err != nil {
+							s.abort(err)
+							return err
+						}
+						for name, value := range opts {
+							if name == "blksize" {
+								blksize, err := strconv.Atoi(value)
+								if err != nil {
+									delete(s.opts, name)
+									continue
+								}
+								s.setBlockSize(blksize)
+							}
+						}
+						return nil
+					}
+				}
+			}
+			if s.retry.count() < s.retries {
+				s.retry.backoff()
+				continue
+			}
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *sender) sendWithRetry(l int) (*net.UDPAddr, error) {
-	s.retry.reset()
-	for {
-		addr, err := s.sendDatagram(l)
-		if _, ok := err.(net.Error); ok && s.retry.count() < s.retries {
-			s.retry.backoff()
-			continue
-		}
-		return addr, nil
-	}
+// read file from r, and write data to server
+func (s *sender) ReadFrom(r io.Reader) (int64, error) {
+	return 0, nil
 }
 
-func (s *sender) sendDatagram(l int) (*net.UDPAddr, error) {
+func (s *sender) recvDatagram() error {
 	err := s.conn.SetReadDeadline(time.Now().Add(s.timeout))
 	if err != nil {
-		return nil, err
+		return err
 	}
-	_, err = s.conn.WriteToUDP(s.send[:l], s.addr)
+	n, addr, err := s.conn.ReadFromUDP(s.receive)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	for {
-		n, addr, err := s.conn.ReadFromUDP(s.receive)
-		if err != nil {
-			return nil, err
-		}
-		if !addr.IP.Equal(s.addr.IP) || (s.tid != 0 && addr.Port != s.tid) {
-			continue
-		}
-		p, err := parsePacket(s.receive[:n])
-		if err != nil {
-			continue
-		}
-		s.tid = addr.Port
-		switch p := p.(type) {
-		case pACK:
-			if p.block() == s.block {
-				return addr, nil
-			}
-		case pOACK:
-			opts, err := unpackOACK(p)
-			if s.block != 0 {
-				continue
-			}
-			if err != nil {
-				s.abort(err)
-				return addr, err
-			}
-			for name, value := range opts {
-				if name == "blksize" {
-					err := s.setBlockSize(value)
-					if err != nil {
-						continue
-					}
-				}
-			}
-			return addr, nil
-		case pERROR:
-			return nil, fmt.Errorf("sending block %d: code=%d, error: %s",
-				s.block, p.code(), p.message())
-		}
+	if !addr.IP.Equal(s.addr.IP) || (s.tid != 0 && addr.Port != s.tid) {
+		return fmt.Errorf("datagram not wanted")
 	}
+	s.tid = addr.Port
+	s.receivedSize = n
+	return nil
+}
+
+func (s *sender) sendDatagram(data []byte) error {
+	_, err := s.conn.WriteToUDP(data, s.addr)
+	return err
 }
 
 func (s *sender) abort(err error) error {
@@ -222,7 +308,7 @@ func (s *sender) abort(err error) error {
 		s.conn.Close()
 		s.conn = nil
 	}()
-	n := packERROR(s.send, 1, err.Error())
-	_, err = s.conn.WriteToUDP(s.send[:n], s.addr)
+	n := packERROR(s.blocks[0].data, 1, err.Error())
+	_, err = s.conn.WriteToUDP(s.blocks[0].data[:n], s.addr)
 	return err
 }
