@@ -6,24 +6,40 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
-	"sync"
 	"time"
 )
 
 const (
 	defaultBlockNum  = 5
 	maxBlockNum      = 10
-	defaultBlockSize = 512
-	minBlockSize     = 512
+	defaultBlockSize = 516
+	minBlockSize     = 516
 	maxBlockSize     = 65464
 )
 
 type blocker struct {
-	id    int
+	id    uint16 // block id
+	size  int    // block size
+	used  bool   // block in use
 	data  []byte // data in block
 	retry *backoff
 	timer *time.Timer
+}
+
+// implement io.Writer interface
+func (b *blocker) Write(p []byte) (n int, err error) { return }
+
+// implement io.ReaderFrom
+func (b *blocker) ReadFrom(r io.Reader) (n int64, err error) {
+	initBlockHeader(b.data, b.id)
+	bn, err := r.Read(b.data[blockHeaderLength:])
+	if err == nil {
+		b.used = true
+		b.size = blockHeaderLength + bn
+	}
+	return int64(bn), err
 }
 
 var (
@@ -31,13 +47,12 @@ var (
 	fileNotExistError   = errors.New("file does not exist")
 	fileNotSame         = errors.New("file not same")
 	serverInternalError = errors.New("server internal error occurred")
+	timeoutError        = errors.New("handle transmission timeout")
 )
 
 type sender struct {
 	blockNum     int // block numbers for sending while waiting for ack
-	blocks       []blocker
-	blockStatus  map[int]bool // status for each block, false for unused and true for used
-	mux          sync.Mutex
+	blocks       []*blocker
 	conn         *net.UDPConn
 	addr         *net.UDPAddr
 	localIP      net.IP
@@ -57,16 +72,8 @@ func (s *sender) setBlockNum(num int) {
 	if num < 1 || num > maxBlockNum {
 		num = defaultBlockNum
 	}
-	if s.blockNum > 0 {
-		for k, _ := range s.blockStatus {
-			delete(s.blockStatus, k)
-		}
-	}
 	s.blockNum = num
-	s.blocks = make([]blocker, num)
-	for i := 0; i < num; i++ {
-		s.blockStatus[i] = false
-	}
+	s.blocks = make([]*blocker, num)
 }
 
 func (s *sender) setBlockSize(blksize int) {
@@ -74,7 +81,7 @@ func (s *sender) setBlockSize(blksize int) {
 		blksize = defaultBlockSize
 	}
 	for i := 0; i < s.blockNum; i++ {
-		s.blocks[i].data = make([]byte, blksize+4)
+		s.blocks[i].data = make([]byte, blksize+blockHeaderLength)
 	}
 }
 
@@ -86,6 +93,7 @@ func (s *sender) SetSize(n int64) {
 	}
 }
 
+// used by client side to establish a connection with server
 func (s *sender) shakeHands() error {
 	info, err := json.Marshal(s.file)
 	if err != nil {
@@ -200,6 +208,34 @@ func (s *sender) shakeHands() error {
 	}
 }
 
+// send file contents
+func (s *sender) sendContents() error {
+	fp, err := os.Open(s.file.Filename)
+	if err != nil {
+		return err
+	}
+	defer fp.Close()
+
+	var blockID uint16 = 1 // start data transmission with block 1
+	for {
+		for i := 0; i < s.blockNum && !s.blocks[i].used; i++ {
+			s.blocks[i].id = blockID
+			n, err := io.Copy(s.blocks[i], fp)
+			if err == io.EOF { // end of file
+				return nil
+			} else if err != nil {
+				return err
+			}
+			blockID++
+			_, err = s.conn.WriteToUDP(s.blocks[i].data[:s.blocks[i].size], s.addr)
+			if err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// deal with options
 func (s *sender) dealOpts(opts options) {}
 
 func (s *sender) sendRQ() error {

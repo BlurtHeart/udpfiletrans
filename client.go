@@ -2,9 +2,7 @@ package sftp
 
 import (
 	"fmt"
-	"io"
 	"net"
-	"strconv"
 	"time"
 )
 
@@ -29,6 +27,44 @@ func NewClient(addr string) (*Client, error) {
 	}, nil
 }
 
+// recv file from server
+// return error if failed, otherwise, return nil
+func (c *Client) RecvFile(filename string) error { return nil }
+
+// send file to server
+// return error if failed, otherwise, return nil
+func (c *Client) SendFile(filename string) error {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{})
+	if err != nil {
+		return err
+	}
+	flr, err := NewFiler(filename)
+	if err != nil {
+		return err
+	}
+	s := &sender{
+		receive: make([]byte, datagramLength),
+		conn:    conn,
+		retry:   &backoff{handler: c.backoff},
+		timeout: c.timeout,
+		retries: c.retries,
+		addr:    c.addr,
+		file:    flr,
+	}
+	s.setBlockNum(0)
+	s.setBlockSize(0)
+	err = s.shakeHands()
+	if err != nil {
+		return err
+	}
+	// begin send file block
+	err = s.sendContents()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // SetTimeout sets maximum time client waits for single network round-trip to succeed.
 // Default is 5 seconds.
 func (c *Client) SetTimeout(t time.Duration) {
@@ -51,34 +87,4 @@ func (c *Client) SetRetries(count int) {
 // backoff duration prior to retransmitting an unacknowledged packet.
 func (c *Client) SetBackoff(h backoffFunc) {
 	c.backoff = h
-}
-
-// Send starts outgoing file transmission. It returns io.ReaderFrom or error.
-func (c Client) Send(filename string, mode string) (io.ReaderFrom, error) {
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{})
-	if err != nil {
-		return nil, err
-	}
-	s := &sender{
-		send:    make([]byte, defaultLength),
-		receive: make([]byte, defaultLength),
-		conn:    conn,
-		retry:   &backoff{handler: c.backoff},
-		timeout: c.timeout,
-		retries: c.retries,
-		addr:    c.addr,
-		mode:    mode,
-	}
-	if c.blksize != 0 {
-		s.opts = make(options)
-		s.opts["blksize"] = strconv.Itoa(c.blksize)
-	}
-	n := packRQ(s.send, opWRQ, filename, mode, s.opts)
-	addr, err := s.sendWithRetry(n)
-	if err != nil {
-		return nil, err
-	}
-	s.addr = addr
-	s.opts = nil
-	return s, nil
 }

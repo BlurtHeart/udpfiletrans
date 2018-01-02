@@ -16,8 +16,9 @@ const (
 )
 
 const (
-	blockLength    = 512
-	datagramLength = 516
+	blockHeaderLength = 4
+	blockBodyLength   = 512
+	datagramLength    = 516
 )
 
 type options map[string]string
@@ -140,6 +141,11 @@ type pDATA []byte
 
 func (p pDATA) block() uint16 {
 	return binary.BigEndian.Uint16(p[2:])
+}
+
+func initBlockHeader(p []byte, id uint16) {
+	binary.BigEndian.PutUint16(p[:2], opDATA)
+	binary.BigEndian.PutUint16(p[2:4], id)
 }
 
 // ACK packet

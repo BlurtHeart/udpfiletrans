@@ -35,6 +35,25 @@
 
 6. 服务器如果在等待响应。则根据以上具体响应内容决定是否继续传输以及传输开始位置。
 
+## 传输数据
+
+启动两个goroutine，一个用来发数据，一个用来收数据的确认。
+
+### 窗口机制
+
+模仿TCP，实现一个弱化版的窗口机制。
+
+blockNum*blockSize是窗口大小。
+
+### 超时重传机制
+
+- 重传次数：retries
+- 超时时间：timeout
+
+### 数据的确认
+
+不同于tcp的时延确认，每个数据包都要确认一次。
+
 ## Disclaimer
 
 Inspired by [tftp](https://github.com/pin/tftp)
