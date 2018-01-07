@@ -50,6 +50,7 @@ func (c *Client) SendFile(filename string) error {
 		retries: c.retries,
 		addr:    c.addr,
 		file:    flr,
+		opcode:  opWRQ,
 	}
 	s.setBlockNum(0)
 	s.setBlockSize(0)

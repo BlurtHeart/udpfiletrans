@@ -216,22 +216,67 @@ func (s *sender) sendContents() error {
 	}
 	defer fp.Close()
 
+	// waiting acks for each block
+	go s.recvACKs()
+
 	var blockID uint16 = 1 // start data transmission with block 1
 	for {
 		for i := 0; i < s.blockNum && !s.blocks[i].used; i++ {
 			s.blocks[i].id = blockID
 			n, err := io.Copy(s.blocks[i], fp)
 			if err == io.EOF { // end of file
+				// check each block acked
 				return nil
 			} else if err != nil {
 				return err
 			}
+			s.blocks[i].used = true
+			s.blocks[i].retry.reset()
+			s.blocks[i].timer = time.NewTimer(time.Duration(s.timeout))
+			go s.sendBlock(i)
 			blockID++
-			_, err = s.conn.WriteToUDP(s.blocks[i].data[:s.blocks[i].size], s.addr)
-			if err != nil {
-				return err
+		}
+	}
+}
+
+// send block data
+func (s *sender) sendBlock(i int) {
+	s.conn.WriteToUDP(s.blocks[i].data[:s.blocks[i].size], s.addr)
+	// check timeout
+	select {
+	case <-s.blocks[i].timer.C:
+		if s.blocks[i].retry.count() < s.retries {
+			s.blocks[i].retry.attemp++
+			s.blocks[i].timer.Reset(time.Duration(s.timeout))
+			s.sendBlock(i)
+		} else {
+			// stop all transfer
+		}
+	}
+}
+
+// receive acks
+func (s *sender) recvACKs() {
+	for {
+		err := s.recvDatagram()
+		if err != nil {
+			continue
+		}
+		res, err := parsePacket(s.receive[:s.receivedSize])
+		if err != nil {
+			continue
+		}
+		if ackData, ok := res.(pACK); ok {
+			id := ackData.block()
+			for i := 0; i < s.blockNum; i++ {
+				if s.blocks[i].id == id {
+					s.blocks[i].used = false
+					s.blocks[i].timer.Stop()
+					break
+				}
 			}
 		}
+		// abort
 	}
 }
 
